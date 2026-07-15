@@ -2,7 +2,7 @@
 
 NFL, NCAAF, NHL, NBA, and MLB data flowing through BigQuery, modeled with dbt, and surfaced in Superset. Recap text runs through an LLM extraction step that pulls out fields the box score doesn't have: injury status, key events, momentum.
 
-Full design: [architecture.md](./architecture.md). Why specific choices were made: [decisions.md](./decisions.md).
+Full design: [architecture.md](./architecture.md).
 
 ## Stack
 

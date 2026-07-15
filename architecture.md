@@ -20,17 +20,17 @@ A sports analytics pipeline covering ingestion, transformation, orchestration, a
 
 **Sport coverage:** NBA, NFL, NHL, MLB, and NCAAF (college football).
 
-**Confirmed sources** (see decisions.md D010 and D011 for the full research and why alternatives were rejected):
+**Confirmed sources:**
 
 - **Structured stats - open-source, per-sport (D011, D012), zero recurring cost:**
   - NFL: [nflverse](https://github.com/nflverse) (CC-BY 4.0, flat files on GitHub releases)
   - NCAAF: [CollegeFootballData](https://collegefootballdata.com/) (documented REST API, free tier)
   - NHL: [api-web.nhle.com](https://github.com/Zmalski/NHL-API-Reference) (NHL's own public API)
   - NBA: [nba_api](https://github.com/swar/nba_api) (MIT, wraps stats.nba.com)
-  - MLB: [MLB Stats API](https://statsapi.mlb.com/) (official source powering MLB.com/Statcast - not pybaseball's Baseball-Reference/FanGraphs scraping, see D012)
+  - MLB: [MLB Stats API](https://statsapi.mlb.com/) (official source powering MLB.com/Statcast)
 - **Recap/commentary text: ESPN's unofficial `site.api.espn.com` news endpoints** - undocumented, no formal ToS grant, accepted as a real risk given it's genuine journalist-written content (independent of the box score) rather than AI-generated stats summaries. Covers all five sports under the same API pattern. Keep polling light, cache aggressively, and build resilient error handling since the endpoint could change without notice.
 
-**Build sequencing:** NFL → NCAAF → NHL → NBA → MLB. Prove the pipeline end-to-end on NFL first, then replicate the ingestion pattern sport by sport in that order - see decisions.md D012.
+**Build sequencing:** NFL → NCAAF → NHL → NBA → MLB. Prove the pipeline end-to-end on NFL first, then replicate the ingestion pattern sport by sport in that order.
 
 ---
 
@@ -79,7 +79,7 @@ The real fact table - the one with actual additive measures - is `fact_games`, a
 
 RAG Q&A over recaps is explicitly a later iteration, not v1. But the schema for it is designed in now, so v1 doesn't have to be restructured to support it later.
 
-**Why not just add a vector column to `fact_games`:** BigQuery stores embeddings as `ARRAY<FLOAT64>` columns (not a dedicated vector type - Snowflake has one, BigQuery doesn't), and requires uniform array dimensions across all values in the column. More importantly, effective RAG retrieval requires chunking recap text into paragraphs rather than embedding a whole article as one vector - which means multiple embeddings per game. Storing that in the existing fact table would either denormalize multiple vectors into one row (violates 1NF - repeating group in a cell) or force a grain change on a table everything else depends on. See decisions.md (D005).
+**Why not just add a vector column to `fact_games`:** BigQuery stores embeddings as `ARRAY<FLOAT64>` columns (not a dedicated vector type - Snowflake has one, BigQuery doesn't), and requires uniform array dimensions across all values in the column. More importantly, effective RAG retrieval requires chunking recap text into paragraphs rather than embedding a whole article as one vector - which means multiple embeddings per game. Storing that in the existing fact table would either denormalize multiple vectors into one row (violates 1NF - repeating group in a cell) or force a grain change on a table everything else depends on.
 
 **Design instead - a bridge table pattern** (Kimball's standard technique for attaching a multi-valued, non-additive attribute to a fact without changing its grain):
 
@@ -117,13 +117,13 @@ The optional RAG Q&A layer (v2) sits on top of this, once the bridge tables abov
 
 ## 6. Orchestration
 
-**Airflow**, scheduling: ingest (structured + recap) → dbt run (bronze → silver → gold) → LLM extraction step → Superset refresh. See decisions.md (D006) for why Airflow over Dagster.
+**Airflow**, scheduling: ingest (structured + recap) → dbt run (bronze → silver → gold) → LLM extraction step → Superset refresh.
 
 ---
 
 ## 7. BI Layer
 
-**Superset**, not Metabase. See decisions.md (D007). Dashboards should visibly use the AI-extracted fields (e.g., injury impact on team performance), so the AI layer's output is seen paying off downstream, not just sitting in a table unused.
+**Superset**. Dashboards should visibly use the AI-extracted fields (e.g., injury impact on team performance), so the AI layer's output is seen paying off downstream, not just sitting in a table unused.
 
 ---
 
@@ -167,4 +167,4 @@ The optional RAG Q&A layer (v2) sits on top of this, once the bridge tables abov
 
 ## 11. Open Decisions & Risks
 
-- **Data source confirmation:** resolved, see section 2 and decisions.md D010. Residual risk: ESPN's unofficial endpoint could change or get rate-limited without notice; StoryStats noted as a documented fallback if it does, accepting the weaker AI framing that comes with it.
+- **Data source confirmation:** resolved, see section 2. Residual risk: ESPN's unofficial endpoint could change or get rate-limited without notice; StoryStats is the documented fallback if it does.
