@@ -1,6 +1,6 @@
 # Diagrams
 
-Whimsical is the primary format for diagrams in this project — cloud-hosted and directly editable at the link below, no export/import needed to update it. Mermaid versions are kept here as a local, version-controlled fallback: they live in this file (so they're in git regardless of Whimsical access), render natively on GitHub, and can be opened for online editing at the live-edit link.
+Whimsical is the primary format for diagrams in this project - cloud-hosted and directly editable at the link below, no export/import needed to update it. Mermaid versions are kept here as a local, version-controlled fallback: they live in this file (so they're in git regardless of Whimsical access), render natively on GitHub, and can be opened for online editing at the live-edit link.
 
 ## Pipeline Architecture
 
