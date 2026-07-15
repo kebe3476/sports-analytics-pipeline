@@ -7,32 +7,30 @@
 
 ## 1. Objective
 
-A single flagship portfolio project demonstrating range across three target role categories — Data Analyst, Analytics Engineering, and Data Engineering — plus a genuinely necessary AI component. The AI piece is scoped to solve an actual problem in the pipeline (unstructured text has no structured equivalent), not added to check a box.
-
-A secondary Databricks + PySpark project remains optional for platform breadth later, but is not required to demonstrate any of the three roles — this project covers all three on its own. See decisions.md (D002).
+A sports analytics pipeline covering ingestion, transformation, orchestration, an AI extraction step, and BI, end to end, for structured stats and unstructured recap text across five sports. The AI component is scoped to solve an actual problem in the pipeline: unstructured text has no structured equivalent, and the recap text contains information (injury context, coaching decisions, momentum) the stats alone don't capture.
 
 ---
 
 ## 2. Domain & Data Sources
 
-**Domain:** Sports data — chosen specifically because it produces two genuinely different data types that need different treatment:
+**Domain:** Sports data - chosen specifically because it produces two genuinely different data types that need different treatment:
 
-- **Structured:** box scores, player stats, team/roster data — API-native, ideal for a conventional medallion build.
-- **Unstructured:** game recaps and commentary — not queryable in SQL, and contains information (injury context, coaching decisions, momentum) that the structured stats don't capture.
+- **Structured:** box scores, player stats, team/roster data - API-native, ideal for a conventional medallion build.
+- **Unstructured:** game recaps and commentary - not queryable in SQL, and contains information (injury context, coaching decisions, momentum) that the structured stats don't capture.
 
 **Sport coverage:** NBA, NFL, NHL, MLB, and NCAAF (college football).
 
-**Confirmed sources** (see decisions.md D010 and D011 for the full research and why alternatives were rejected):
+**Confirmed sources:**
 
-- **Structured stats — open-source, per-sport (D011, D012), zero recurring cost:**
+- **Structured stats - open-source, per-sport (D011, D012), zero recurring cost:**
   - NFL: [nflverse](https://github.com/nflverse) (CC-BY 4.0, flat files on GitHub releases)
   - NCAAF: [CollegeFootballData](https://collegefootballdata.com/) (documented REST API, free tier)
   - NHL: [api-web.nhle.com](https://github.com/Zmalski/NHL-API-Reference) (NHL's own public API)
   - NBA: [nba_api](https://github.com/swar/nba_api) (MIT, wraps stats.nba.com)
-  - MLB: [MLB Stats API](https://statsapi.mlb.com/) (official source powering MLB.com/Statcast — not pybaseball's Baseball-Reference/FanGraphs scraping, see D012)
-- **Recap/commentary text: ESPN's unofficial `site.api.espn.com` news endpoints** — undocumented, no formal ToS grant, accepted as a real risk given it's genuine journalist-written content (independent of the box score) rather than AI-generated stats summaries. Covers all five sports under the same API pattern. Keep polling light, cache aggressively, and build resilient error handling since the endpoint could change without notice.
+  - MLB: [MLB Stats API](https://statsapi.mlb.com/) (official source powering MLB.com/Statcast)
+- **Recap/commentary text: ESPN's unofficial `site.api.espn.com` news endpoints** - undocumented, no formal ToS grant, accepted as a real risk given it's genuine journalist-written content (independent of the box score) rather than AI-generated stats summaries. Covers all five sports under the same API pattern. Keep polling light, cache aggressively, and build resilient error handling since the endpoint could change without notice.
 
-**Build sequencing:** NFL → NCAAF → NHL → NBA → MLB. Prove the pipeline end-to-end on NFL first, then replicate the ingestion pattern sport by sport in that order — see decisions.md D012.
+**Build sequencing:** NFL → NCAAF → NHL → NBA → MLB. Prove the pipeline end-to-end on NFL first, then replicate the ingestion pattern sport by sport in that order.
 
 ---
 
@@ -75,15 +73,15 @@ A secondary Databricks + PySpark project remains optional for platform breadth l
 
 ### 4.1 Star schema (core)
 
-The real fact table — the one with actual additive measures — is `fact_games`, at one-row-per-game grain: score, team stats, player stats. Standard dimensions: `dim_teams`, `dim_players`, `dim_date`. This is untouched by the AI/RAG extension below; nothing about adding unstructured-data support changes its grain.
+The real fact table - the one with actual additive measures - is `fact_games`, at one-row-per-game grain: score, team stats, player stats. Standard dimensions: `dim_teams`, `dim_players`, `dim_date`. This is untouched by the AI/RAG extension below; nothing about adding unstructured-data support changes its grain.
 
-### 4.2 AI/RAG extension (bridge structure — scoped for v2, reserved now)
+### 4.2 AI/RAG extension (bridge structure - scoped for v2, reserved now)
 
 RAG Q&A over recaps is explicitly a later iteration, not v1. But the schema for it is designed in now, so v1 doesn't have to be restructured to support it later.
 
-**Why not just add a vector column to `fact_games`:** BigQuery stores embeddings as `ARRAY<FLOAT64>` columns (not a dedicated vector type — Snowflake has one, BigQuery doesn't), and requires uniform array dimensions across all values in the column. More importantly, effective RAG retrieval requires chunking recap text into paragraphs rather than embedding a whole article as one vector — which means multiple embeddings per game. Storing that in the existing fact table would either denormalize multiple vectors into one row (violates 1NF — repeating group in a cell) or force a grain change on a table everything else depends on. See decisions.md (D005).
+**Why not just add a vector column to `fact_games`:** BigQuery stores embeddings as `ARRAY<FLOAT64>` columns (not a dedicated vector type - Snowflake has one, BigQuery doesn't), and requires uniform array dimensions across all values in the column. More importantly, effective RAG retrieval requires chunking recap text into paragraphs rather than embedding a whole article as one vector - which means multiple embeddings per game. Storing that in the existing fact table would either denormalize multiple vectors into one row (violates 1NF - repeating group in a cell) or force a grain change on a table everything else depends on.
 
-**Design instead — a bridge table pattern** (Kimball's standard technique for attaching a multi-valued, non-additive attribute to a fact without changing its grain):
+**Design instead - a bridge table pattern** (Kimball's standard technique for attaching a multi-valued, non-additive attribute to a fact without changing its grain):
 
 recaps
 recap_id (PK) | game_id (FK → fact_games) | source | published_at
@@ -92,40 +90,40 @@ recap_chunks
 chunk_id (PK) | recap_id (FK → recaps) | chunk_index | chunk_text | embedding ARRAY<FLOAT64>
 
 - `recaps` bridges `fact_games` (one game → many recaps, e.g. beat writer + wire service) without touching the fact table's grain.
-- `recap_chunks` is a child/detail table one level below the bridge, at chunk grain. It has no additive measures, so in strict terms it's a **factless fact table** — it records that a chunk exists in association with a recap, nothing more.
-- This is a two-level bridge-then-child chain, *not* a hierarchy bridge (a different Kimball pattern reserved for recursive, ragged self-referencing relationships like org charts or bills of materials — doesn't apply here since nothing is self-referencing or variable-depth).
+- `recap_chunks` is a child/detail table one level below the bridge, at chunk grain. It has no additive measures, so in strict terms it's a **factless fact table** - it records that a chunk exists in association with a recap, nothing more.
+- This is a two-level bridge-then-child chain, *not* a hierarchy bridge (a different Kimball pattern reserved for recursive, ragged self-referencing relationships like org charts or bills of materials - doesn't apply here since nothing is self-referencing or variable-depth).
 
-**Referential integrity caveat:** BigQuery allows declaring PK/FK constraints but does not enforce them — they're metadata hints for the query optimizer only. Integrity between `recap_chunks → recaps → fact_games` has to be enforced with dbt `relationships` tests, not the database.
+**Referential integrity caveat:** BigQuery allows declaring PK/FK constraints but does not enforce them - they're metadata hints for the query optimizer only. Integrity between `recap_chunks → recaps → fact_games` has to be enforced with dbt `relationships` tests, not the database.
 
 **v1 vs. v2 scope:**
 - **v1:** land raw recap text at silver as a plain string column, one row per recap. No embeddings yet.
-- **v2 (RAG iteration):** add a pipeline step — chunk, embed, load — that populates `recaps` and `recap_chunks`, then build a `CREATE VECTOR INDEX` on `recap_chunks.embedding`. No changes required to `fact_games` or any existing gold model.
+- **v2 (RAG iteration):** add a pipeline step - chunk, embed, load - that populates `recaps` and `recap_chunks`, then build a `CREATE VECTOR INDEX` on `recap_chunks.embedding`. No changes required to `fact_games` or any existing gold model.
 
 ---
 
-## 5. AI Component — Rationale & Design
+## 5. AI Component - Rationale & Design
 
-The AI's job is not a chatbot bolted on top of dashboards. It's an LLM-based extraction step that runs between silver and gold: recap text contains information the structured stats don't (why a player was pulled, coaching decisions, momentum shifts), and manually parsing that doesn't scale. The extraction step pulls structured fields out of the text — injury flags, sentiment/momentum tags, key events — and lands them as new columns that dbt models can test and Superset can chart directly.
+The AI's job is not a chatbot bolted on top of dashboards. It's an LLM-based extraction step that runs between silver and gold: recap text contains information the structured stats don't (why a player was pulled, coaching decisions, momentum shifts), and manually parsing that doesn't scale. The extraction step pulls structured fields out of the text - injury flags, sentiment/momentum tags, key events - and lands them as new columns that dbt models can test and Superset can chart directly.
 
-This comes with real engineering problems to solve, which are themselves the interview story:
+This comes with real engineering problems to solve:
 
 - **Non-determinism:** LLM output isn't guaranteed consistent between runs; needs validation before it's trusted into gold.
 - **Cost:** re-running extraction on unchanged recaps burns money for no benefit; needs caching keyed on recap ID so only new/changed text gets processed.
 - **Reliability:** the pipeline needs to handle LLM call failures/retries like any other unreliable upstream dependency, not treat the LLM as a black box that always succeeds.
 
-The optional RAG Q&A layer (v2) sits on top of this, once the bridge tables above are populated — natural-language questions answered against the vectorized recap corpus.
+The optional RAG Q&A layer (v2) sits on top of this, once the bridge tables above are populated - natural-language questions answered against the vectorized recap corpus.
 
 ---
 
 ## 6. Orchestration
 
-**Airflow**, scheduling: ingest (structured + recap) → dbt run (bronze → silver → gold) → LLM extraction step → Superset refresh. See decisions.md (D006) for why Airflow over Dagster.
+**Airflow**, scheduling: ingest (structured + recap) → dbt run (bronze → silver → gold) → LLM extraction step → Superset refresh.
 
 ---
 
 ## 7. BI Layer
 
-**Superset**, not Metabase. See decisions.md (D007). Dashboards should visibly use the AI-extracted fields (e.g., injury impact on team performance), so the AI layer's output is seen paying off downstream, not just sitting in a table unused.
+**Superset**. Dashboards should visibly use the AI-extracted fields (e.g., injury impact on team performance), so the AI layer's output is seen paying off downstream, not just sitting in a table unused.
 
 ---
 
@@ -169,5 +167,4 @@ The optional RAG Q&A layer (v2) sits on top of this, once the bridge tables abov
 
 ## 11. Open Decisions & Risks
 
-- **Data source confirmation:** resolved — see section 2 and decisions.md D010. Residual risk: ESPN's unofficial endpoint could change or get rate-limited without notice; StoryStats noted as a documented fallback if it does, accepting the weaker AI framing that comes with it.
-- **Secondary project:** Databricks + PySpark project remains optional, for platform breadth only — not required to cover DA/AE/DE range, which this project already does on its own.
+- **Data source confirmation:** resolved, see section 2. Residual risk: ESPN's unofficial endpoint could change or get rate-limited without notice; StoryStats is the documented fallback if it does.
