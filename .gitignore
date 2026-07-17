@@ -11,7 +11,11 @@ git-workflow.md
 # Credentials, never commit
 .env
 .env.*
+!.env.example
 .envrc
+
+# Airflow runtime output
+airflow/logs/
 *service-account*.json
 credentials.json
 secrets.json
