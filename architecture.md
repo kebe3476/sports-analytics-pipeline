@@ -1,7 +1,7 @@
 # Architecture
 
 **Status:** Design finalized, ready for build
-**Last updated:** 2026-07-14
+**Last updated:** 2026-07-16 (warehouse switched to Databricks, see D020)
 
 ---
 
@@ -22,7 +22,7 @@ A sports analytics pipeline covering ingestion, transformation, orchestration, a
 
 **Confirmed sources:**
 
-- **Structured stats - open-source, per-sport (D011, D012), zero recurring cost:**
+- **Structured stats - open-source, per-sport, zero recurring cost:**
   - NFL: [nflverse](https://github.com/nflverse) (CC-BY 4.0, flat files on GitHub releases)
   - NCAAF: [CollegeFootballData](https://collegefootballdata.com/) (documented REST API, free tier)
   - NHL: [api-web.nhle.com](https://github.com/Zmalski/NHL-API-Reference) (NHL's own public API)
@@ -39,7 +39,7 @@ A sports analytics pipeline covering ingestion, transformation, orchestration, a
 ```
                     ┌─────────────┐
    Sports API  ───► │   Bronze    │  raw structured data (games, players, teams)
-   Recap source ───►│  (BigQuery) │  raw unstructured text (recaps)
+   Recap source ───►│ (Databricks)│  raw unstructured text (recaps)
                     └──────┬──────┘
                            │  dbt
                            ▼
@@ -79,7 +79,7 @@ The real fact table - the one with actual additive measures - is `fact_games`, a
 
 RAG Q&A over recaps is explicitly a later iteration, not v1. But the schema for it is designed in now, so v1 doesn't have to be restructured to support it later.
 
-**Why not just add a vector column to `fact_games`:** BigQuery stores embeddings as `ARRAY<FLOAT64>` columns (not a dedicated vector type - Snowflake has one, BigQuery doesn't), and requires uniform array dimensions across all values in the column. More importantly, effective RAG retrieval requires chunking recap text into paragraphs rather than embedding a whole article as one vector - which means multiple embeddings per game. Storing that in the existing fact table would either denormalize multiple vectors into one row (violates 1NF - repeating group in a cell) or force a grain change on a table everything else depends on.
+**Why not just add a vector column to `fact_games`:** effective RAG retrieval requires chunking recap text into paragraphs rather than embedding a whole article as one vector, which means multiple embeddings per game. Storing that in the existing fact table would either denormalize multiple vectors into one row (violates 1NF - repeating group in a cell) or force a grain change on a table everything else depends on. This holds regardless of warehouse platform - it's a normalization problem, not a BigQuery-specific one.
 
 **Design instead - a bridge table pattern** (Kimball's standard technique for attaching a multi-valued, non-additive attribute to a fact without changing its grain):
 
@@ -93,11 +93,11 @@ chunk_id (PK) | recap_id (FK → recaps) | chunk_index | chunk_text | embedding 
 - `recap_chunks` is a child/detail table one level below the bridge, at chunk grain. It has no additive measures, so in strict terms it's a **factless fact table** - it records that a chunk exists in association with a recap, nothing more.
 - This is a two-level bridge-then-child chain, *not* a hierarchy bridge (a different Kimball pattern reserved for recursive, ragged self-referencing relationships like org charts or bills of materials - doesn't apply here since nothing is self-referencing or variable-depth).
 
-**Referential integrity caveat:** BigQuery allows declaring PK/FK constraints but does not enforce them - they're metadata hints for the query optimizer only. Integrity between `recap_chunks → recaps → fact_games` has to be enforced with dbt `relationships` tests, not the database.
+**Referential integrity caveat:** Databricks (Unity Catalog) allows declaring PK/FK constraints but does not enforce them - they're informational only. Integrity between `recap_chunks → recaps → fact_games` has to be enforced with dbt `relationships` tests, not the database.
 
 **v1 vs. v2 scope:**
 - **v1:** land raw recap text at silver as a plain string column, one row per recap. No embeddings yet.
-- **v2 (RAG iteration):** add a pipeline step - chunk, embed, load - that populates `recaps` and `recap_chunks`, then build a `CREATE VECTOR INDEX` on `recap_chunks.embedding`. No changes required to `fact_games` or any existing gold model.
+- **v2 (RAG iteration):** add a pipeline step - chunk, embed, load - that populates `recaps` and `recap_chunks`, then build a vector index on `recap_chunks.embedding`. Databricks Free Edition includes one native AI Search (vector search) endpoint, worth evaluating against a manually-managed index when this phase starts. No changes required to `fact_games` or any existing gold model.
 
 ---
 
@@ -119,6 +119,8 @@ The optional RAG Q&A layer (v2) sits on top of this, once the bridge tables abov
 
 **Airflow**, scheduling: ingest (structured + recap) → dbt run (bronze → silver → gold) → LLM extraction step → Superset refresh.
 
+Ingestion runs in Airflow's own environment, not as native Databricks notebooks or jobs: Databricks Free Edition's serverless compute restricts outbound access to a fixed allowlist that doesn't cover the sports APIs. Airflow fetches from the sources and loads into Databricks over its SQL connection.
+
 ---
 
 ## 7. BI Layer
@@ -131,12 +133,12 @@ The optional RAG Q&A layer (v2) sits on top of this, once the bridge tables abov
 
 | Layer | Choice |
 |---|---|
-| Warehouse | BigQuery (permanent free tier; chosen over Snowflake trial) |
+| Warehouse | Databricks Free Edition (no-cost, no billing account required) |
 | Transformation | dbt Core |
 | Orchestration | Airflow |
 | BI | Superset |
 | AI / extraction | LLM-based structured extraction (silver → gold step) |
-| AI / retrieval (v2) | Vector search via BigQuery `ARRAY<FLOAT64>` + `CREATE VECTOR INDEX` |
+| AI / retrieval (v2) | Vector search via Databricks AI Search endpoint or a managed index on `recap_chunks.embedding` |
 
 ---
 
@@ -152,7 +154,7 @@ The optional RAG Q&A layer (v2) sits on top of this, once the bridge tables abov
 
 **v1 (core build):**
 1. Confirm data source(s) for structured stats + recap text.
-2. Ingestion → bronze in BigQuery.
+2. Ingestion → bronze in Databricks.
 3. dbt medallion: silver (cleaned/tested) → gold (star schema, SCD Type 2 on roster).
 4. LLM extraction step: recap text → structured fields into gold.
 5. Airflow DAG tying it together.
@@ -168,3 +170,4 @@ The optional RAG Q&A layer (v2) sits on top of this, once the bridge tables abov
 ## 11. Open Decisions & Risks
 
 - **Data source confirmation:** resolved, see section 2. Residual risk: ESPN's unofficial endpoint could change or get rate-limited without notice; StoryStats is the documented fallback if it does.
+- **Warehouse:** resolved, see D020. Residual risk: Databricks Free Edition accounts may be deleted after prolonged inactivity (not a fixed window like BigQuery Sandbox's 60 days, but undocumented exactly how long). Revisit if the project goes dormant for an extended stretch.

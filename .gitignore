@@ -1,4 +1,4 @@
-# Claude agent files — internal only, not for public repo
+# Claude agent files, internal only, not for public repo
 CLAUDE.md
 progress.md
 guardrails.md
@@ -8,7 +8,7 @@ git-workflow.md
 # Claude Code local config
 .claude/
 
-# Credentials — never commit
+# Credentials, never commit
 .env
 .env.*
 .envrc
