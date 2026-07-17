@@ -1,6 +1,6 @@
 # Sports Analytics Pipeline
 
-NFL, NCAAF, NHL, NBA, and MLB data flowing through BigQuery, modeled with dbt, and surfaced in Superset. Recap text runs through an LLM extraction step that pulls out fields the box score doesn't have: injury status, key events, momentum.
+NFL, NCAAF, NHL, NBA, and MLB data flowing through Databricks, modeled with dbt, and surfaced in Superset. Recap text runs through an LLM extraction step that pulls out fields the box score doesn't have: injury status, key events, momentum.
 
 Full design: [architecture.md](./architecture.md).
 
@@ -8,7 +8,7 @@ Full design: [architecture.md](./architecture.md).
 
 | Layer | Tool |
 |---|---|
-| Warehouse | BigQuery |
+| Warehouse | Databricks |
 | Transformation | dbt Core |
 | Orchestration | Airflow |
 | BI | Superset |
@@ -16,7 +16,7 @@ Full design: [architecture.md](./architecture.md).
 
 ## Data sources
 
-All free, no paid vendor APIs. Full sourcing research in decisions.md D010 to D012.
+All free, no paid vendor APIs.
 
 | Sport | Source |
 |---|---|
@@ -37,7 +37,7 @@ All free, no paid vendor APIs. Full sourcing research in decisions.md D010 to D0
 
 ## Status
 
-Design complete. Build in progress.
+Design complete. Build not started.
 
 ## Setup
 
