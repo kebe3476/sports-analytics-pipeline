@@ -1,0 +1,2 @@
+nfl-data-py>=0.3.0
+databricks-sql-connector>=3.0.0
