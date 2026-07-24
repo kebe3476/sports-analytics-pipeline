@@ -11,7 +11,7 @@ from databricks import sql as databricks_sql
 from airflow import DAG
 from airflow.operators.python import PythonOperator
 
-CATALOG = "main"
+CATALOG = "workspace"
 SCHEMA = "bronze"
 DEFAULT_SEASON = 2024
 
@@ -34,7 +34,7 @@ def _coerce_df(df: pd.DataFrame) -> pd.DataFrame:
     return df
 
 
-def _write_df(cursor, df: pd.DataFrame, table: str) -> None:
+def _write_df(cursor, df: pd.DataFrame, table: str, batch_size: int = 100) -> None:
     full = f"`{CATALOG}`.`{SCHEMA}`.`{table}`"
     type_map = {
         "int64": "BIGINT",
@@ -54,9 +54,7 @@ def _write_df(cursor, df: pd.DataFrame, table: str) -> None:
         for row in df.itertuples(index=False)
     ]
 
-    # Multi-row parameterized INSERT in batches of 100
-    row_template = "(" + ", ".join(["%s"] * len(df.columns)) + ")"
-    batch_size = 100
+    row_template = "(" + ", ".join(["?"] * len(df.columns)) + ")"
     for i in range(0, len(rows), batch_size):
         batch = rows[i : i + batch_size]
         placeholders = ", ".join([row_template] * len(batch))
@@ -118,7 +116,7 @@ def ingest_espn_recaps(**context):
     df = pd.DataFrame(records)
     with _db_conn() as conn:
         with conn.cursor() as cursor:
-            _write_df(cursor, df, "nfl_recaps_raw")
+            _write_df(cursor, df, "nfl_recaps_raw", batch_size=1)
 
     print(f"Loaded {len(df)} recaps for season {season}")
 
