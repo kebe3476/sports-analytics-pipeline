@@ -120,9 +120,10 @@ def _run_recaps(season: int) -> None:
         except requests.HTTPError:
             if resp.status_code == 404:
                 print(f"No ESPN data for game {espn_id}: 404")
+            elif resp.status_code == 429:
+                raise  # rate limited: fail task so Airflow retry backs off
             else:
-                # 429 (rate limited) or 5xx: fail the task so retry kicks in
-                raise
+                print(f"WARNING: ESPN {resp.status_code} for game {espn_id}, skipping")
         except Exception as exc:
             print(f"Skipped ESPN game {espn_id}: {exc}")
         time.sleep(0.5)
@@ -158,7 +159,7 @@ with DAG(
     params={"season": DEFAULT_SEASON},
     default_args={"retries": 1, "retry_delay": timedelta(minutes=5)},
     tags=["bronze", "nfl"],
-) as dag:
+) as weekly_dag:
     t_schedules = PythonOperator(
         task_id="ingest_nfl_schedules",
         python_callable=ingest_nfl_schedules,
