@@ -66,12 +66,56 @@ def _write_season(cursor, df: pd.DataFrame, table: str, season: int, batch_size:
     main = f"`{CATALOG}`.`{SCHEMA}`.`{table}`"
     staging = f"`{CATALOG}`.`{SCHEMA}`.`{table}_staging_{season}`"
     col_defs = _col_defs(df)
+    spark_type_map = {
+        "int64": "BIGINT", "float64": "DOUBLE",
+        "bool": "BOOLEAN", "datetime64[ns]": "TIMESTAMP",
+    }
+    df_col_set = set(df.columns)
+
+    def _staging_type(col: str) -> str:
+        return spark_type_map.get(str(df[col].dtype), "STRING")
+
     cursor.execute(f"CREATE TABLE IF NOT EXISTS {main} ({col_defs}) USING DELTA")
+
+    # Get main's current schema in column order
+    result = cursor.execute(f"DESCRIBE TABLE {main}")
+    main_cols = [
+        (row[0], row[1]) for row in result.fetchall()
+        if row[0] and not row[0].startswith("#")
+    ]
+    main_schema = {name: typ for name, typ in main_cols}
+
+    # Add columns in df that are missing from main
+    for col in df.columns:
+        if col not in main_schema:
+            col_type = spark_type_map.get(str(df[col].dtype), "STRING")
+            cursor.execute(f"ALTER TABLE {main} ADD COLUMN `{col}` {col_type}")
+            main_cols.append((col, col_type))
+            main_schema[col] = col_type
+
     cursor.execute(f"DROP TABLE IF EXISTS {staging}")
     cursor.execute(f"CREATE TABLE {staging} ({col_defs}) USING DELTA")
     _insert_rows(cursor, staging, df, batch_size)
+
+    # Build SELECT aligned to main's column order:
+    # - column exists in staging with matching type: select as-is
+    # - column exists in staging but type differs: try_cast (returns NULL on failure)
+    # - column missing from staging: CAST(NULL AS type)
+    select_parts = []
+    for col_name, col_type in main_cols:
+        if col_name in df_col_set:
+            if _staging_type(col_name).lower() == col_type.lower():
+                select_parts.append(f"`{col_name}`")
+            else:
+                select_parts.append(
+                    f"try_cast(`{col_name}` AS {col_type.upper()}) AS `{col_name}`"
+                )
+        else:
+            select_parts.append(f"CAST(NULL AS {col_type.upper()}) AS `{col_name}`")
+
+    select_clause = ", ".join(select_parts)
     cursor.execute(
-        f"INSERT INTO {main} REPLACE WHERE season = {season} SELECT * FROM {staging}"
+        f"INSERT INTO {main} REPLACE WHERE season = {season} SELECT {select_clause} FROM {staging}"
     )
     cursor.execute(f"DROP TABLE IF EXISTS {staging}")
 
@@ -82,18 +126,25 @@ def _run_schedules(season_year: int) -> None:
     all_games: list[dict] = []
     seen_ids: set = set()
     while current <= end:
-        resp = requests.get(
-            f"{NHL_BASE}/schedule/{current.strftime('%Y-%m-%d')}",
-            timeout=30,
-        )
-        resp.raise_for_status()
+        for attempt in range(5):
+            resp = requests.get(
+                f"{NHL_BASE}/schedule/{current.strftime('%Y-%m-%d')}",
+                timeout=30,
+            )
+            if resp.status_code == 429:
+                wait = 60 * (attempt + 1)
+                print(f"NHL API 429, waiting {wait}s (attempt {attempt + 1}/5)")
+                time.sleep(wait)
+                continue
+            resp.raise_for_status()
+            break
         for week in resp.json().get("gameWeek", []):
             for game in week.get("games", []):
                 if game["id"] not in seen_ids:
                     seen_ids.add(game["id"])
                     all_games.append(game)
         current += timedelta(days=7)
-        time.sleep(0.2)
+        time.sleep(1.0)
 
     if not all_games:
         print(f"No NHL games found for season {season_year}.")
@@ -118,7 +169,7 @@ def _run_recaps(season_year: int) -> None:
     with _db_conn() as conn:
         with conn.cursor() as cursor:
             result = cursor.execute(
-                f"SELECT nhl_game_id, gameDate, homeTeam_abbrev "
+                f"SELECT nhl_game_id, startTimeUTC, homeTeam_abbrev "
                 f"FROM `{CATALOG}`.`{SCHEMA}`.`nhl_games_raw` "
                 f"WHERE season = {season_year} AND gameState = 'OFF'"
             )
@@ -126,8 +177,10 @@ def _run_recaps(season_year: int) -> None:
 
     # Step 2: group by date, call ESPN scoreboard per date, map home abbrev -> ESPN event ID
     games_by_date: dict = defaultdict(list)
-    for nhl_game_id, game_date, home_abbrev in game_rows:
-        games_by_date[game_date].append((nhl_game_id, home_abbrev))
+    for nhl_game_id, start_time_utc, home_abbrev in game_rows:
+        game_date = start_time_utc[:10] if start_time_utc else None
+        if game_date:
+            games_by_date[game_date].append((nhl_game_id, home_abbrev))
 
     espn_id_map: dict = {}
     for game_date, games in sorted(games_by_date.items()):
@@ -241,7 +294,7 @@ def nhl_bronze_backfill():
         p = ctx["params"]
         return list(range(p["start_season"], p["end_season"] + 1))
 
-    @task(max_active_tis_per_dagrun=3)
+    @task(max_active_tis_per_dagrun=1)
     def run_schedules(season: int) -> None:
         _run_schedules(season)
 
