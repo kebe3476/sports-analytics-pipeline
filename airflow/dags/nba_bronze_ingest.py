@@ -101,7 +101,8 @@ def _write_season(cursor, df: pd.DataFrame, table: str, season: int, batch_size:
             main_cols.append((col, col_type))
             main_schema[col] = col_type
 
-    cursor.execute(f"CREATE OR REPLACE TABLE {staging} ({col_defs}) USING DELTA")
+    cursor.execute(f"DROP TABLE IF EXISTS {staging}")
+    cursor.execute(f"CREATE TABLE {staging} ({col_defs}) USING DELTA")
     _insert_rows(cursor, staging, df, batch_size)
 
     select_parts = []
@@ -271,6 +272,7 @@ with DAG(
     start_date=datetime(2024, 10, 1),
     schedule="@weekly",
     catchup=False,
+    max_active_runs=1,
     params={"season": DEFAULT_SEASON},
     default_args={"retries": 1, "retry_delay": timedelta(minutes=5)},
     tags=["bronze", "nba"],

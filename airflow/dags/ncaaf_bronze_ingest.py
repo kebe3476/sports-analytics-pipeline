@@ -166,6 +166,7 @@ with DAG(
     start_date=datetime(2024, 9, 1),
     schedule="@weekly",
     catchup=False,
+    max_active_runs=1,
     params={"season": DEFAULT_SEASON},
     default_args={"retries": 1, "retry_delay": timedelta(minutes=5)},
     tags=["bronze", "ncaaf"],
