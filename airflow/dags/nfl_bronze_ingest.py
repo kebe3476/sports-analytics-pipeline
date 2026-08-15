@@ -72,8 +72,7 @@ def _write_season(cursor, df: pd.DataFrame, table: str, season: int, batch_size:
     col_defs = _col_defs(df)
 
     cursor.execute(f"CREATE TABLE IF NOT EXISTS {main} ({col_defs}) USING DELTA")
-    cursor.execute(f"DROP TABLE IF EXISTS {staging}")
-    cursor.execute(f"CREATE TABLE {staging} ({col_defs}) USING DELTA")
+    cursor.execute(f"CREATE OR REPLACE TABLE {staging} ({col_defs}) USING DELTA")
     _insert_rows(cursor, staging, df, batch_size)
     cursor.execute(
         f"INSERT INTO {main} REPLACE WHERE season = {season} SELECT * FROM {staging}"
