@@ -37,8 +37,8 @@ All free, no paid vendor APIs.
 
 ## Status
 
-Design complete. Build not started.
+Build in progress (v1). Bronze ingestion is complete for NFL, NCAAF, and NHL. NBA bronze DAG is written and pending a Docker rebuild. MLB bronze is next. dbt modeling (silver/gold) and the LLM extraction step follow after all five sports are ingested.
 
 ## Setup
 
-TBD, filled in once ingestion is scaffolded.
+TBD, filled in once the full pipeline is scaffolded.
