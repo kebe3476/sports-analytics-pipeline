@@ -93,8 +93,7 @@ def _write_season(cursor, df: pd.DataFrame, table: str, season: int, batch_size:
             main_cols.append((col, col_type))
             main_schema[col] = col_type
 
-    cursor.execute(f"DROP TABLE IF EXISTS {staging}")
-    cursor.execute(f"CREATE TABLE {staging} ({col_defs}) USING DELTA")
+    cursor.execute(f"CREATE OR REPLACE TABLE {staging} ({col_defs}) USING DELTA")
     _insert_rows(cursor, staging, df, batch_size)
 
     # Build SELECT aligned to main's column order:
