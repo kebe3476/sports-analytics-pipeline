@@ -8,7 +8,6 @@ from datetime import datetime, timedelta
 import pandas as pd
 import requests
 from databricks import sql as databricks_sql
-from nba_api.stats.endpoints import LeagueGameLog
 
 from airflow import DAG
 from airflow.decorators import dag, task
@@ -126,6 +125,10 @@ def _write_season(cursor, df: pd.DataFrame, table: str, season: int, batch_size:
 
 
 def _run_schedules(season_year: int) -> None:
+    # Lazy import: nba_api is not installed until after Docker rebuild; importing
+    # at module level would break DAG parsing before the image is rebuilt.
+    from nba_api.stats.endpoints import LeagueGameLog  # noqa: PLC0415
+
     # nba_api season format: "2023-24"
     season_str = f"{season_year}-{str(season_year + 1)[-2:]}"
     dfs = []
