@@ -25,6 +25,8 @@ MLB_GAME_TYPES = ("R", "F", "D", "L", "W")
 # MLB Stats API vs ESPN abbreviation mismatches (add as discovered)
 MLB_TO_ESPN_ABBREV: dict[str, str] = {
     "ANA": "LAA",  # Anaheim Angels (pre-2005) listed as ANA in older data
+    "CWS": "CHW",  # Chicago White Sox: MLB Stats API uses CWS, ESPN uses CHW
+    "AZ": "ARI",   # Arizona Diamondbacks: MLB Stats API uses AZ, ESPN uses ARI
 }
 
 # Status values that indicate a completed game
