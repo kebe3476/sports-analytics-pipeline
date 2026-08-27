@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** Build in progress (v1). Bronze ingestion complete for NFL, NCAAF, NHL. NBA pending Docker rebuild. MLB next.
-**Last updated:** 2026-08-07
+**Status:** Build in progress (v1). Bronze ingestion complete for all five sports. NBA and MLB 2024 verification runs in progress as of 2026-08-26.
+**Last updated:** 2026-08-26
 
 ---
 
@@ -154,7 +154,7 @@ Ingestion runs in Airflow's own environment, not as native Databricks notebooks 
 
 **v1 (core build):**
 1. [done] Confirm data source(s) for structured stats + recap text.
-2. [in progress] Ingestion → bronze in Databricks. NFL, NCAAF, NHL complete. NBA written (Docker rebuild pending). MLB next.
+2. [done] Ingestion → bronze in Databricks. All five sports (NFL, NCAAF, NHL, NBA, MLB) complete. Backfills running or pending.
 3. dbt medallion: silver (cleaned/tested) → gold (star schema, SCD Type 2 on roster).
 4. LLM extraction step: recap text → structured fields into gold.
 5. Airflow DAG tying it together.
