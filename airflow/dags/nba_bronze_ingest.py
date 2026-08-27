@@ -27,6 +27,8 @@ NBA_TO_ESPN_ABBREV = {
     "NOH": "NO",
     "NOK": "NO",
     "NJN": "NJ",
+    "UTA": "UTAH",  # Utah Jazz: NBA API uses UTA, ESPN uses UTAH
+    "WAS": "WSH",   # Washington Wizards: NBA API uses WAS, ESPN uses WSH
 }
 
 
@@ -124,6 +126,35 @@ def _write_season(cursor, df: pd.DataFrame, table: str, season: int, batch_size:
     cursor.execute(f"DROP TABLE IF EXISTS {staging}")
 
 
+def _upsert_recaps(cursor, df: pd.DataFrame, table: str, id_col: str, batch_size: int = 50) -> None:
+    """
+    Merge recap rows into the main table, matching on (id_col, season).
+    Unlike _write_season, this never deletes existing rows, making it safe
+    for incremental writes: call multiple times and already-written rows are
+    updated in place while new rows are inserted.
+    """
+    import uuid as _uuid
+
+    main = f"`{CATALOG}`.`{SCHEMA}`.`{table}`"
+    staging = f"`{CATALOG}`.`{SCHEMA}`.`{table}_stg_{_uuid.uuid4().hex[:8]}`"
+    col_defs = _col_defs(df)
+
+    cursor.execute(f"CREATE TABLE IF NOT EXISTS {main} ({col_defs}) USING DELTA")
+    cursor.execute(f"CREATE OR REPLACE TABLE {staging} ({col_defs}) USING DELTA")
+    _insert_rows(cursor, staging, df, batch_size)
+
+    set_clause = ", ".join(
+        f"t.`{c}` = s.`{c}`" for c in df.columns if c not in (id_col, "season")
+    )
+    cursor.execute(
+        f"MERGE INTO {main} AS t USING {staging} AS s "
+        f"ON t.`{id_col}` = s.`{id_col}` AND t.`season` = s.`season` "
+        f"WHEN MATCHED THEN UPDATE SET {set_clause} "
+        f"WHEN NOT MATCHED THEN INSERT *"
+    )
+    cursor.execute(f"DROP TABLE IF EXISTS {staging}")
+
+
 def _run_schedules(season_year: int) -> None:
     # Lazy import: nba_api is not installed until after Docker rebuild; importing
     # at module level would break DAG parsing before the image is rebuilt.
@@ -166,7 +197,8 @@ def _run_schedules(season_year: int) -> None:
 
 
 def _run_recaps(season_year: int) -> None:
-    # Pull home-team rows only (MATCHUP contains "vs.") for completed games
+    # Pull home-team rows only (MATCHUP contains "vs.") for completed games.
+    # Also check which game IDs already have recaps written so retries skip them.
     with _db_conn() as conn:
         with conn.cursor() as cursor:
             result = cursor.execute(
@@ -178,11 +210,23 @@ def _run_recaps(season_year: int) -> None:
             )
             game_rows = result.fetchall()
 
+            existing_ids: set = set()
+            try:
+                ex = cursor.execute(
+                    f"SELECT nba_game_id FROM `{CATALOG}`.`{SCHEMA}`.`nba_recaps_raw` "
+                    f"WHERE season = {season_year}"
+                )
+                existing_ids = {str(r[0]) for r in ex.fetchall()}
+                if existing_ids:
+                    print(f"Found {len(existing_ids)} existing recaps for season {season_year}, will skip them.")
+            except Exception:
+                pass  # Table doesn't exist yet; start fresh.
+
     if not game_rows:
         print(f"No completed NBA home-team rows found for season {season_year}.")
         return
 
-    # Group by date for scoreboard lookup (one ESPN call per date, not per game)
+    # Group by date for scoreboard lookup (one ESPN call per date, not per game).
     games_by_date: dict = defaultdict(list)
     for game_id, game_date, home_abbrev in game_rows:
         if game_date:
@@ -220,8 +264,35 @@ def _run_recaps(season_year: int) -> None:
         print(f"No ESPN IDs resolved for season {season_year}.")
         return
 
-    records = []
-    for game_id, espn_event_id in espn_id_map.items():
+    # Skip games whose recaps are already written -- makes retries resume from
+    # where the previous run left off instead of starting over.
+    pending = {k: v for k, v in espn_id_map.items() if str(k) not in existing_ids}
+    if not pending:
+        print(f"All {len(espn_id_map)} matched recaps already written for season {season_year}.")
+        return
+    if existing_ids:
+        print(
+            f"Fetching recaps for {len(pending)} of {len(espn_id_map)} matched games "
+            f"({len(existing_ids)} already written)."
+        )
+
+    # Fetch ESPN recap summaries and flush to Databricks in batches.
+    # Flushing every FLUSH_EVERY records means a task kill only loses the
+    # current batch; the next retry skips everything already committed.
+    FLUSH_EVERY = 100
+    records: list = []
+    total_written = 0
+
+    def _flush(batch: list) -> None:
+        nonlocal total_written
+        df_batch = _coerce_df(pd.DataFrame(batch))
+        with _db_conn() as conn:
+            with conn.cursor() as cursor:
+                _upsert_recaps(cursor, df_batch, "nba_recaps_raw", "nba_game_id")
+        total_written += len(batch)
+        print(f"Flushed {len(batch)} recaps (total so far: {total_written})")
+
+    for game_id, espn_event_id in pending.items():
         url = f"{ESPN_NBA_BASE}/summary?event={espn_event_id}"
         try:
             resp = requests.get(url, timeout=15)
@@ -244,15 +315,14 @@ def _run_recaps(season_year: int) -> None:
             print(f"Skipped ESPN event {espn_event_id}: {exc}")
         time.sleep(0.5)
 
-    if not records:
-        print("No ESPN recap records to load.")
-        return
+        if len(records) >= FLUSH_EVERY:
+            _flush(records)
+            records = []
 
-    df = pd.DataFrame(records)
-    with _db_conn() as conn:
-        with conn.cursor() as cursor:
-            _write_season(cursor, df, "nba_recaps_raw", season_year, batch_size=1)
-    print(f"Loaded {len(records)} NBA recaps for season {season_year}")
+    if records:
+        _flush(records)
+
+    print(f"Loaded {total_written} NBA recaps for season {season_year}")
 
 
 # ── Weekly DAG ───────────────────────────────────────────────────────────────
