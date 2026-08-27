@@ -288,7 +288,7 @@ def _run_recaps(season_year: int) -> None:
         df_batch = _coerce_df(pd.DataFrame(batch))
         with _db_conn() as conn:
             with conn.cursor() as cursor:
-                _upsert_recaps(cursor, df_batch, "nba_recaps_raw", "nba_game_id")
+                _upsert_recaps(cursor, df_batch, "nba_recaps_raw", "nba_game_id", batch_size=1)
         total_written += len(batch)
         print(f"Flushed {len(batch)} recaps (total so far: {total_written})")
 
