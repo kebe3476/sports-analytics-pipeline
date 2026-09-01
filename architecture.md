@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** Build in progress (v1). Bronze ingestion complete for all five sports. NBA and MLB 2024 verification runs in progress as of 2026-08-26.
-**Last updated:** 2026-08-26
+**Status:** Build in progress (v1). Bronze schedules complete for all five sports. Recaps complete for NFL, NCAAF, NHL, and NBA; MLB recaps deferred pending a retry of the literal-insert fix (commit 6c7d58a). NBA backfill (2010-2023) running. dbt scaffold is next.
+**Last updated:** 2026-08-31
 
 ---
 
@@ -154,8 +154,8 @@ Ingestion runs in Airflow's own environment, not as native Databricks notebooks 
 
 **v1 (core build):**
 1. [done] Confirm data source(s) for structured stats + recap text.
-2. [done] Ingestion → bronze in Databricks. All five sports (NFL, NCAAF, NHL, NBA, MLB) complete. Backfills running or pending.
-3. dbt medallion: silver (cleaned/tested) → gold (star schema, SCD Type 2 on roster).
+2. [done] Ingestion → bronze in Databricks. Schedules complete for all five sports (NFL, NCAAF, NHL, NBA, MLB). Recaps complete for NFL, NCAAF, NHL, NBA; MLB recaps deferred (fix committed, pending retry). Historical backfills: NFL done (1999-2025), NCAAF done (2000-2023), NHL done (2010-2023), NBA running (2010-2023), MLB pending.
+3. [in progress] dbt medallion: silver (cleaned/tested) → gold (star schema, SCD Type 2 on roster). Requires dim_teams design decision first (see section 11).
 4. LLM extraction step: recap text → structured fields into gold.
 5. Airflow DAG tying it together.
 6. Superset dashboards on gold, incorporating AI-extracted fields.
@@ -171,3 +171,5 @@ Ingestion runs in Airflow's own environment, not as native Databricks notebooks 
 
 - **Data source confirmation:** resolved, see section 2. Residual risk: ESPN's unofficial endpoint could change or get rate-limited without notice; StoryStats is the documented fallback if it does.
 - **Warehouse:** resolved, see D020. Residual risk: Databricks Free Edition accounts may be deleted after prolonged inactivity (not a fixed window like BigQuery Sandbox's 60 days, but undocumented exactly how long). Revisit if the project goes dormant for an extended stretch.
+- **dim_teams design (pending):** One unified `dim_teams` table with a `sport` column covers cross-sport queries and keeps the star schema simple, but requires sport-specific columns to either be absent or null for other sports. Per-sport dimension tables avoid sparse nulls but fragment the schema and make cross-sport queries harder. Decision required before the dbt scaffold starts.
+- **MLB recap ingestion (deferred):** Individual MLB recap JSON blobs can exceed Databricks's 1MB parameterized query limit. Fix is committed (literal SQL embedding via `_insert_rows_literal`, commit 6c7d58a) but not yet verified in a live run. MLB recaps are absent from the warehouse until a retry confirms the fix.
