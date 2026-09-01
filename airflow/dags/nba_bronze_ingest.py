@@ -160,6 +160,20 @@ def _run_schedules(season_year: int) -> None:
     # at module level would break DAG parsing before the image is rebuilt.
     from nba_api.stats.endpoints import LeagueGameLog  # noqa: PLC0415
 
+    # stats.nba.com blocks requests that do not look like a real browser.
+    # These headers mirror what the NBA website sends and prevent immediate
+    # connection refusal, which would crash the worker before any log is written.
+    NBA_HEADERS = {
+        "User-Agent": (
+            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+            "AppleWebKit/537.36 (KHTML, like Gecko) "
+            "Chrome/120.0.0.0 Safari/537.36"
+        ),
+        "Referer": "https://www.nba.com/",
+        "x-nba-stats-origin": "stats",
+        "x-nba-stats-token": "true",
+    }
+
     # nba_api season format: "2023-24"
     season_str = f"{season_year}-{str(season_year + 1)[-2:]}"
     dfs = []
@@ -170,6 +184,7 @@ def _run_schedules(season_year: int) -> None:
                 player_or_team_abbreviation="T",
                 season_type_all_star=season_type,
                 timeout=60,
+                headers=NBA_HEADERS,
             )
             df = log.get_data_frames()[0]
             if not df.empty:
@@ -376,11 +391,11 @@ def nba_bronze_backfill():
         p = ctx["params"]
         return list(range(p["start_season"], p["end_season"] + 1))
 
-    @task(max_active_tis_per_dagrun=2)
+    @task(max_active_tis_per_dagrun=1)
     def run_schedules(season: int) -> None:
         _run_schedules(season)
 
-    @task(max_active_tis_per_dagrun=2)
+    @task(max_active_tis_per_dagrun=1)
     def run_recaps(season: int) -> None:
         _run_recaps(season)
 
