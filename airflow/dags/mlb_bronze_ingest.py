@@ -75,6 +75,37 @@ def _insert_rows(cursor, full_table: str, df: pd.DataFrame, batch_size: int) -> 
         cursor.execute(f"INSERT INTO {full_table} VALUES {placeholders}", params)
 
 
+def _insert_rows_literal(cursor, full_table: str, df: pd.DataFrame) -> None:
+    """
+    Insert rows one at a time using SQL string literals instead of parameterized
+    queries. Use for recap tables where JSON blobs can exceed Databricks's 1MB
+    combined parameter limit -- even batch_size=1 fails when a single JSON column
+    is larger than the limit on its own.
+    """
+    col_list = ", ".join(f"`{c}`" for c in df.columns)
+    for row in df.itertuples(index=False):
+        parts = []
+        for val in row:
+            if val is None or (isinstance(val, float) and pd.isna(val)):
+                parts.append("NULL")
+            elif isinstance(val, bool):
+                parts.append("TRUE" if val else "FALSE")
+            elif isinstance(val, int):
+                parts.append(str(val))
+            elif isinstance(val, float):
+                parts.append(repr(val))
+            elif hasattr(val, "strftime"):
+                parts.append(f"TIMESTAMP '{val.strftime('%Y-%m-%d %H:%M:%S')}'")
+            else:
+                # Escape single quotes by doubling (SQL standard, works in Spark SQL).
+                # JSON uses double quotes internally so this is the only escape needed.
+                escaped = str(val).replace("'", "''")
+                parts.append(f"'{escaped}'")
+        cursor.execute(
+            f"INSERT INTO {full_table} ({col_list}) VALUES ({', '.join(parts)})"
+        )
+
+
 def _write_season(cursor, df: pd.DataFrame, table: str, season: int, batch_size: int = 100) -> None:
     main = f"`{CATALOG}`.`{SCHEMA}`.`{table}`"
     staging = f"`{CATALOG}`.`{SCHEMA}`.`{table}_staging_{season}`"
@@ -126,12 +157,16 @@ def _write_season(cursor, df: pd.DataFrame, table: str, season: int, batch_size:
     cursor.execute(f"DROP TABLE IF EXISTS {staging}")
 
 
-def _upsert_recaps(cursor, df: pd.DataFrame, table: str, id_col: str, batch_size: int = 50) -> None:
+def _upsert_recaps(cursor, df: pd.DataFrame, table: str, id_col: str) -> None:
     """
     Merge recap rows into the main table, matching on (id_col, season).
     Unlike _write_season, this never deletes existing rows, making it safe
     for incremental writes: call multiple times and already-written rows are
     updated in place while new rows are inserted.
+
+    Uses _insert_rows_literal (SQL literal embedding) rather than parameterized
+    queries so that individual recap JSON blobs larger than Databricks's 1MB
+    combined parameter limit do not cause BAD_REQUEST failures.
     """
     import uuid as _uuid
 
@@ -141,7 +176,7 @@ def _upsert_recaps(cursor, df: pd.DataFrame, table: str, id_col: str, batch_size
 
     cursor.execute(f"CREATE TABLE IF NOT EXISTS {main} ({col_defs}) USING DELTA")
     cursor.execute(f"CREATE OR REPLACE TABLE {staging} ({col_defs}) USING DELTA")
-    _insert_rows(cursor, staging, df, batch_size)
+    _insert_rows_literal(cursor, staging, df)
 
     set_clause = ", ".join(
         f"t.`{c}` = s.`{c}`" for c in df.columns if c not in (id_col, "season")
@@ -303,7 +338,7 @@ def _run_recaps(season_year: int) -> None:
         df_batch = _coerce_df(pd.DataFrame(batch))
         with _db_conn() as conn:
             with conn.cursor() as cursor:
-                _upsert_recaps(cursor, df_batch, "mlb_recaps_raw", "mlb_game_id", batch_size=1)
+                _upsert_recaps(cursor, df_batch, "mlb_recaps_raw", "mlb_game_id")
         total_written += len(batch)
         print(f"Flushed {len(batch)} recaps (total so far: {total_written})")
 
