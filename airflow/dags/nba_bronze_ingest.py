@@ -32,12 +32,34 @@ NBA_TO_ESPN_ABBREV = {
 }
 
 
-def _db_conn():
-    return databricks_sql.connect(
-        server_hostname=os.environ["DATABRICKS_HOST"].replace("https://", ""),
-        http_path=os.environ["DATABRICKS_HTTP_PATH"],
-        access_token=os.environ["DATABRICKS_TOKEN"],
-    )
+def _db_conn(max_attempts: int = 4, retry_delay: int = 30):
+    """
+    Open a Databricks SQL connection, retrying on transient BAD_REQUEST errors.
+    Databricks Free Edition occasionally returns 'Cannot create the resource,
+    please try again later' when the SQL warehouse is under load or restarting.
+    Retrying at the code level avoids burning an Airflow task retry on a condition
+    that typically resolves within seconds to a minute.
+    """
+    last_err: Exception | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            return databricks_sql.connect(
+                server_hostname=os.environ["DATABRICKS_HOST"].replace("https://", ""),
+                http_path=os.environ["DATABRICKS_HTTP_PATH"],
+                access_token=os.environ["DATABRICKS_TOKEN"],
+            )
+        except Exception as exc:
+            if "Cannot create the resource" in str(exc) or "BAD_REQUEST" in str(exc):
+                last_err = exc
+                if attempt < max_attempts:
+                    print(
+                        f"Databricks connection attempt {attempt}/{max_attempts} failed "
+                        f"(transient): {exc}. Retrying in {retry_delay}s."
+                    )
+                    time.sleep(retry_delay)
+                    continue
+            raise
+    raise last_err  # type: ignore[misc]
 
 
 def _coerce_df(df: pd.DataFrame) -> pd.DataFrame:
