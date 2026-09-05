@@ -234,9 +234,12 @@ def _run_schedules(season_year: int) -> None:
 
 
 def _run_recaps(season_year: int) -> None:
-    # Pull home-team rows only (MATCHUP contains "vs.") for completed games.
-    # Also check which game IDs already have recaps written so retries skip them.
+    # Single connection held open for the entire task. Closing and reopening
+    # between the read phase and the write phase lets the Databricks Free Edition
+    # SQL warehouse auto-stop (10-min idle timeout), causing BAD_REQUEST when the
+    # write phase tries to reconnect. Keeping one session alive prevents that.
     with _db_conn() as conn:
+        # --- Read phase ---
         with conn.cursor() as cursor:
             result = cursor.execute(
                 f"SELECT GAME_ID, GAME_DATE, TEAM_ABBREVIATION "
@@ -259,105 +262,105 @@ def _run_recaps(season_year: int) -> None:
             except Exception:
                 pass  # Table doesn't exist yet; start fresh.
 
-    if not game_rows:
-        print(f"No completed NBA home-team rows found for season {season_year}.")
-        return
+        if not game_rows:
+            print(f"No completed NBA home-team rows found for season {season_year}.")
+            return
 
-    # Group by date for scoreboard lookup (one ESPN call per date, not per game).
-    games_by_date: dict = defaultdict(list)
-    for game_id, game_date, home_abbrev in game_rows:
-        if game_date:
-            date_key = game_date[:10] if isinstance(game_date, str) else game_date.strftime("%Y-%m-%d")
-            games_by_date[date_key].append((game_id, home_abbrev))
+        # --- ESPN scoreboard lookups (connection held open, warehouse stays alive) ---
+        # Group by date: one ESPN scoreboard call per date, not per game.
+        games_by_date: dict = defaultdict(list)
+        for game_id, game_date, home_abbrev in game_rows:
+            if game_date:
+                date_key = game_date[:10] if isinstance(game_date, str) else game_date.strftime("%Y-%m-%d")
+                games_by_date[date_key].append((game_id, home_abbrev))
 
-    espn_id_map: dict = {}
-    for game_date, games in sorted(games_by_date.items()):
-        date_str = game_date.replace("-", "")
-        try:
-            resp = requests.get(
-                f"{ESPN_NBA_BASE}/scoreboard",
-                params={"dates": date_str},
-                timeout=15,
+        espn_id_map: dict = {}
+        for game_date, games in sorted(games_by_date.items()):
+            date_str = game_date.replace("-", "")
+            try:
+                resp = requests.get(
+                    f"{ESPN_NBA_BASE}/scoreboard",
+                    params={"dates": date_str},
+                    timeout=15,
+                )
+                resp.raise_for_status()
+                home_to_espn: dict = {}
+                for event in resp.json().get("events", []):
+                    comps = event.get("competitions", [{}])[0]
+                    for competitor in comps.get("competitors", []):
+                        if competitor.get("homeAway") == "home":
+                            home_to_espn[competitor["team"]["abbreviation"]] = event["id"]
+                for game_id, home_abbrev in games:
+                    espn_abbrev = NBA_TO_ESPN_ABBREV.get(home_abbrev, home_abbrev)
+                    espn_id = home_to_espn.get(espn_abbrev)
+                    if espn_id:
+                        espn_id_map[game_id] = espn_id
+                    else:
+                        print(f"No ESPN match for NBA game {game_id} ({home_abbrev} -> {espn_abbrev} on {game_date})")
+            except Exception as exc:
+                print(f"WARNING: ESPN scoreboard failed for {game_date}: {exc}")
+            time.sleep(0.3)
+
+        if not espn_id_map:
+            print(f"No ESPN IDs resolved for season {season_year}.")
+            return
+
+        # Skip games whose recaps are already written -- makes retries resume from
+        # where the previous run left off instead of starting over.
+        pending = {k: v for k, v in espn_id_map.items() if str(k) not in existing_ids}
+        if not pending:
+            print(f"All {len(espn_id_map)} matched recaps already written for season {season_year}.")
+            return
+        if existing_ids:
+            print(
+                f"Fetching recaps for {len(pending)} of {len(espn_id_map)} matched games "
+                f"({len(existing_ids)} already written)."
             )
-            resp.raise_for_status()
-            home_to_espn: dict = {}
-            for event in resp.json().get("events", []):
-                comps = event.get("competitions", [{}])[0]
-                for competitor in comps.get("competitors", []):
-                    if competitor.get("homeAway") == "home":
-                        home_to_espn[competitor["team"]["abbreviation"]] = event["id"]
-            for game_id, home_abbrev in games:
-                espn_abbrev = NBA_TO_ESPN_ABBREV.get(home_abbrev, home_abbrev)
-                espn_id = home_to_espn.get(espn_abbrev)
-                if espn_id:
-                    espn_id_map[game_id] = espn_id
-                else:
-                    print(f"No ESPN match for NBA game {game_id} ({home_abbrev} -> {espn_abbrev} on {game_date})")
-        except Exception as exc:
-            print(f"WARNING: ESPN scoreboard failed for {game_date}: {exc}")
-        time.sleep(0.3)
 
-    if not espn_id_map:
-        print(f"No ESPN IDs resolved for season {season_year}.")
-        return
+        # --- ESPN recap fetch + write (same open connection, cursor passed in) ---
+        # Flushing every FLUSH_EVERY records means a task kill only loses the
+        # current batch; the next retry skips everything already committed.
+        FLUSH_EVERY = 100
+        records: list = []
+        total_written = 0
 
-    # Skip games whose recaps are already written -- makes retries resume from
-    # where the previous run left off instead of starting over.
-    pending = {k: v for k, v in espn_id_map.items() if str(k) not in existing_ids}
-    if not pending:
-        print(f"All {len(espn_id_map)} matched recaps already written for season {season_year}.")
-        return
-    if existing_ids:
-        print(
-            f"Fetching recaps for {len(pending)} of {len(espn_id_map)} matched games "
-            f"({len(existing_ids)} already written)."
-        )
+        def _flush(batch: list, write_cursor) -> None:
+            nonlocal total_written
+            df_batch = _coerce_df(pd.DataFrame(batch))
+            _upsert_recaps(write_cursor, df_batch, "nba_recaps_raw", "nba_game_id", batch_size=1)
+            total_written += len(batch)
+            print(f"Flushed {len(batch)} recaps (total so far: {total_written})")
 
-    # Fetch ESPN recap summaries and flush to Databricks in batches.
-    # Flushing every FLUSH_EVERY records means a task kill only loses the
-    # current batch; the next retry skips everything already committed.
-    FLUSH_EVERY = 100
-    records: list = []
-    total_written = 0
+        with conn.cursor() as write_cursor:
+            for game_id, espn_event_id in pending.items():
+                url = f"{ESPN_NBA_BASE}/summary?event={espn_event_id}"
+                try:
+                    resp = requests.get(url, timeout=15)
+                    resp.raise_for_status()
+                    records.append({
+                        "nba_game_id": game_id,
+                        "espn_game_id": espn_event_id,
+                        "season": season_year,
+                        "raw_json": resp.text,
+                        "_ingested_at": datetime.utcnow(),
+                    })
+                except requests.HTTPError:
+                    if resp.status_code == 404:
+                        print(f"No ESPN recap for event {espn_event_id}: 404")
+                    elif resp.status_code == 429:
+                        raise
+                    else:
+                        print(f"WARNING: ESPN {resp.status_code} for event {espn_event_id}, skipping")
+                except Exception as exc:
+                    print(f"Skipped ESPN event {espn_event_id}: {exc}")
+                time.sleep(0.5)
 
-    def _flush(batch: list) -> None:
-        nonlocal total_written
-        df_batch = _coerce_df(pd.DataFrame(batch))
-        with _db_conn() as conn:
-            with conn.cursor() as cursor:
-                _upsert_recaps(cursor, df_batch, "nba_recaps_raw", "nba_game_id", batch_size=1)
-        total_written += len(batch)
-        print(f"Flushed {len(batch)} recaps (total so far: {total_written})")
+                if len(records) >= FLUSH_EVERY:
+                    _flush(records, write_cursor)
+                    records = []
 
-    for game_id, espn_event_id in pending.items():
-        url = f"{ESPN_NBA_BASE}/summary?event={espn_event_id}"
-        try:
-            resp = requests.get(url, timeout=15)
-            resp.raise_for_status()
-            records.append({
-                "nba_game_id": game_id,
-                "espn_game_id": espn_event_id,
-                "season": season_year,
-                "raw_json": resp.text,
-                "_ingested_at": datetime.utcnow(),
-            })
-        except requests.HTTPError:
-            if resp.status_code == 404:
-                print(f"No ESPN recap for event {espn_event_id}: 404")
-            elif resp.status_code == 429:
-                raise
-            else:
-                print(f"WARNING: ESPN {resp.status_code} for event {espn_event_id}, skipping")
-        except Exception as exc:
-            print(f"Skipped ESPN event {espn_event_id}: {exc}")
-        time.sleep(0.5)
-
-        if len(records) >= FLUSH_EVERY:
-            _flush(records)
-            records = []
-
-    if records:
-        _flush(records)
+            if records:
+                _flush(records, write_cursor)
 
     print(f"Loaded {total_written} NBA recaps for season {season_year}")
 
