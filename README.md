@@ -37,7 +37,7 @@ All free, no paid vendor APIs.
 
 ## Status
 
-Build in progress (v1). Bronze schedules are complete for all five sports. Recaps are loaded for NFL, NCAAF, NHL, and NBA; MLB recaps are pending a fix retry. dbt modeling (silver/gold) is next.
+Build in progress (v1). Bronze ingestion is complete for NFL, NCAAF, NHL, and NBA (schedules, recaps, and historical backfills). MLB schedules are loaded; MLB recaps are pending a fix retry. dbt modeling (silver/gold) is next.
 
 ## Setup
 
