@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** Build in progress (v1). Bronze schedules complete for all five sports. Recaps complete for NFL, NCAAF, NHL, and NBA; MLB recaps deferred pending a retry of the literal-insert fix (commit 6c7d58a). NBA backfill (2010-2023) running. dbt scaffold is next.
-**Last updated:** 2026-08-31
+**Status:** Build in progress (v1). Bronze complete for NFL, NCAAF, NHL, and NBA (schedules + recaps + backfills). MLB schedules loaded for 2024; MLB recaps deferred pending a retry of the literal-insert fix (commit 6c7d58a). dbt scaffold is next.
+**Last updated:** 2026-10-14
 
 ---
 
@@ -154,7 +154,7 @@ Ingestion runs in Airflow's own environment, not as native Databricks notebooks 
 
 **v1 (core build):**
 1. [done] Confirm data source(s) for structured stats + recap text.
-2. [done] Ingestion → bronze in Databricks. Schedules complete for all five sports (NFL, NCAAF, NHL, NBA, MLB). Recaps complete for NFL, NCAAF, NHL, NBA; MLB recaps deferred (fix committed, pending retry). Historical backfills: NFL done (1999-2025), NCAAF done (2000-2023), NHL done (2010-2023), NBA running (2010-2023), MLB pending.
+2. [done] Ingestion → bronze in Databricks. Schedules complete for all five sports. Recaps complete for NFL, NCAAF, NHL, NBA; MLB recaps deferred (fix committed, pending retry). Historical backfills: NFL done (1999-2025), NCAAF done (2000-2023), NHL done (2010-2023), NBA done (2010-2023), MLB pending.
 3. [in progress] dbt medallion: silver (cleaned/tested) → gold (star schema, SCD Type 2 on roster). Requires dim_teams design decision first (see section 11).
 4. LLM extraction step: recap text → structured fields into gold.
 5. Airflow DAG tying it together.
