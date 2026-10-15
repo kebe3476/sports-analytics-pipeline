@@ -37,8 +37,8 @@ All free, no paid vendor APIs.
 
 ## Status
 
-Design complete. Build not started.
+Build in progress (v1). Bronze schedules are complete for all five sports. Recaps are loaded for NFL, NCAAF, NHL, and NBA; MLB recaps are pending a fix retry. dbt modeling (silver/gold) is next.
 
 ## Setup
 
-TBD, filled in once ingestion is scaffolded.
+TBD, filled in once the full pipeline is scaffolded.

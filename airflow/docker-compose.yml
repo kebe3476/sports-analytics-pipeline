@@ -2,6 +2,9 @@ version: '3.8'
 
 x-airflow-common: &airflow-common
   build: .
+  dns:
+    - 8.8.8.8
+    - 8.8.4.4
   environment:
     AIRFLOW__CORE__EXECUTOR: LocalExecutor
     AIRFLOW__DATABASE__SQL_ALCHEMY_CONN: postgresql+psycopg2://airflow:airflow@postgres/airflow

@@ -1,7 +1,7 @@
 # Architecture
 
-**Status:** Design finalized, ready for build
-**Last updated:** 2026-07-16 (warehouse switched to Databricks, see D020)
+**Status:** Build in progress (v1). Bronze schedules complete for all five sports. Recaps complete for NFL, NCAAF, NHL, and NBA; MLB recaps deferred pending a retry of the literal-insert fix (commit 6c7d58a). NBA backfill (2010-2023) running. dbt scaffold is next.
+**Last updated:** 2026-08-31
 
 ---
 
@@ -87,7 +87,7 @@ recaps
 recap_id (PK) | game_id (FK → fact_games) | source | published_at
 
 recap_chunks
-chunk_id (PK) | recap_id (FK → recaps) | chunk_index | chunk_text | embedding ARRAY<FLOAT64>
+chunk_id (PK) | recap_id (FK → recaps) | chunk_index | chunk_text | embedding ARRAY
 
 - `recaps` bridges `fact_games` (one game → many recaps, e.g. beat writer + wire service) without touching the fact table's grain.
 - `recap_chunks` is a child/detail table one level below the bridge, at chunk grain. It has no additive measures, so in strict terms it's a **factless fact table** - it records that a chunk exists in association with a recap, nothing more.
@@ -153,9 +153,9 @@ Ingestion runs in Airflow's own environment, not as native Databricks notebooks 
 ## 10. Phased Roadmap
 
 **v1 (core build):**
-1. Confirm data source(s) for structured stats + recap text.
-2. Ingestion → bronze in Databricks.
-3. dbt medallion: silver (cleaned/tested) → gold (star schema, SCD Type 2 on roster).
+1. [done] Confirm data source(s) for structured stats + recap text.
+2. [done] Ingestion → bronze in Databricks. Schedules complete for all five sports (NFL, NCAAF, NHL, NBA, MLB). Recaps complete for NFL, NCAAF, NHL, NBA; MLB recaps deferred (fix committed, pending retry). Historical backfills: NFL done (1999-2025), NCAAF done (2000-2023), NHL done (2010-2023), NBA running (2010-2023), MLB pending.
+3. [in progress] dbt medallion: silver (cleaned/tested) → gold (star schema, SCD Type 2 on roster). Requires dim_teams design decision first (see section 11).
 4. LLM extraction step: recap text → structured fields into gold.
 5. Airflow DAG tying it together.
 6. Superset dashboards on gold, incorporating AI-extracted fields.
@@ -171,3 +171,5 @@ Ingestion runs in Airflow's own environment, not as native Databricks notebooks 
 
 - **Data source confirmation:** resolved, see section 2. Residual risk: ESPN's unofficial endpoint could change or get rate-limited without notice; StoryStats is the documented fallback if it does.
 - **Warehouse:** resolved, see D020. Residual risk: Databricks Free Edition accounts may be deleted after prolonged inactivity (not a fixed window like BigQuery Sandbox's 60 days, but undocumented exactly how long). Revisit if the project goes dormant for an extended stretch.
+- **dim_teams design (pending):** One unified `dim_teams` table with a `sport` column covers cross-sport queries and keeps the star schema simple, but requires sport-specific columns to either be absent or null for other sports. Per-sport dimension tables avoid sparse nulls but fragment the schema and make cross-sport queries harder. Decision required before the dbt scaffold starts.
+- **MLB recap ingestion (deferred):** Individual MLB recap JSON blobs can exceed Databricks's 1MB parameterized query limit. Fix is committed (literal SQL embedding via `_insert_rows_literal`, commit 6c7d58a) but not yet verified in a live run. MLB recaps are absent from the warehouse until a retry confirms the fix.
