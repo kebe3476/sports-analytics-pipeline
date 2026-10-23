@@ -1,13 +1,13 @@
 # Architecture
 
-**Status:** Build in progress (v1). Bronze complete for NFL, NCAAF, NHL, and NBA (schedules + recaps + backfills). MLB schedules loaded for 2024; MLB recaps deferred pending a retry of the literal-insert fix (commit 6c7d58a). dbt scaffold is next.
-**Last updated:** 2026-10-14
+**Status:** Build in progress (v1). Scope narrowed to NFL and NCAAF. Bronze schedules and recaps loaded for both (NFL 1999-2025, NCAAF 2000-2024, a few NCAAF recap seasons pending a rerun). Silver staging models built and tested. Team and player stats ingestion and the gold star schema are next.
+**Last updated:** 2026-10-22
 
 ---
 
 ## 1. Objective
 
-A sports analytics pipeline covering ingestion, transformation, orchestration, an AI extraction step, and BI, end to end, for structured stats and unstructured recap text across five sports. The AI component is scoped to solve an actual problem in the pipeline: unstructured text has no structured equivalent, and the recap text contains information (injury context, coaching decisions, momentum) the stats alone don't capture.
+A sports analytics pipeline covering ingestion, transformation, orchestration, an AI extraction step, and BI, end to end, for structured stats and unstructured recap text across professional and college football. The AI component is scoped to solve an actual problem in the pipeline: unstructured text has no structured equivalent, and the recap text contains information (injury context, coaching decisions, momentum) the stats alone don't capture.
 
 ---
 
@@ -18,19 +18,16 @@ A sports analytics pipeline covering ingestion, transformation, orchestration, a
 - **Structured:** box scores, player stats, team/roster data - API-native, ideal for a conventional medallion build.
 - **Unstructured:** game recaps and commentary - not queryable in SQL, and contains information (injury context, coaching decisions, momentum) that the structured stats don't capture.
 
-**Sport coverage:** NBA, NFL, NHL, MLB, and NCAAF (college football).
+**Sport coverage:** NFL and NCAAF (college football). Two sports with the same game structure keep the gold model conformed (shared team, player, and game dimensions) instead of reduced to what five different rule sets have in common. NHL, NBA, and MLB were in the original scope and were removed before gold modeling began; NHL is the first candidate to add back once the pipeline runs end to end.
 
 **Confirmed sources:**
 
 - **Structured stats - open-source, per-sport, zero recurring cost:**
-  - NFL: [nflverse](https://github.com/nflverse) (CC-BY 4.0, flat files on GitHub releases)
-  - NCAAF: [CollegeFootballData](https://collegefootballdata.com/) (documented REST API, free tier)
-  - NHL: [api-web.nhle.com](https://github.com/Zmalski/NHL-API-Reference) (NHL's own public API)
-  - NBA: [nba_api](https://github.com/swar/nba_api) (MIT, wraps stats.nba.com)
-  - MLB: [MLB Stats API](https://statsapi.mlb.com/) (official source powering MLB.com/Statcast)
-- **Recap/commentary text: ESPN's unofficial `site.api.espn.com` news endpoints** - undocumented, no formal ToS grant, accepted as a real risk given it's genuine journalist-written content (independent of the box score) rather than AI-generated stats summaries. Covers all five sports under the same API pattern. Keep polling light, cache aggressively, and build resilient error handling since the endpoint could change without notice.
+  - NFL: [nflverse](https://github.com/nflverse) (CC-BY 4.0, flat files on GitHub releases). Schedules, weekly player stats, rosters, and play-by-play back to 1999.
+  - NCAAF: [CollegeFootballData](https://collegefootballdata.com/) (documented REST API, free tier with a monthly call limit). Games, team stats, player stats, and rosters.
+- **Recap/commentary text: ESPN's unofficial `site.api.espn.com` game summary endpoints** (one JSON document per game: article text, box score, game info) - undocumented, no formal ToS grant, accepted as a real risk given it's genuine journalist-written content (independent of the box score) rather than AI-generated stats summaries. Covers both sports under the same API pattern. Keep polling light, cache aggressively, and build resilient error handling since the endpoint could change without notice.
 
-**Build sequencing:** NFL → NCAAF → NHL → NBA → MLB. Prove the pipeline end-to-end on NFL first, then replicate the ingestion pattern sport by sport in that order.
+**Build sequencing:** NFL first, then NCAAF, at each layer. Bronze is in place for both; stats ingestion and gold follow the same order.
 
 ---
 
@@ -73,7 +70,7 @@ A sports analytics pipeline covering ingestion, transformation, orchestration, a
 
 ### 4.1 Star schema (core)
 
-The real fact table - the one with actual additive measures - is `fact_games`, at one-row-per-game grain: score, team stats, player stats. Standard dimensions: `dim_teams`, `dim_players`, `dim_date`. This is untouched by the AI/RAG extension below; nothing about adding unstructured-data support changes its grain.
+The real fact table - the one with actual additive measures - is `fact_games`, at one-row-per-game grain: score and team stats. Player stats are at a finer grain (one row per player per game) and will need their own fact table; that design is pending (see section 11). Standard dimensions: `dim_teams`, `dim_players`, `dim_date`. This is untouched by the AI/RAG extension below; nothing about adding unstructured-data support changes its grain.
 
 ### 4.2 AI/RAG extension (bridge structure - scoped for v2, reserved now)
 
@@ -145,7 +142,7 @@ Ingestion runs in Airflow's own environment, not as native Databricks notebooks 
 ## 9. Role Coverage Map
 
 - **Data Engineering:** API ingestion, schema drift handling, idempotent loads, Airflow orchestration, LLM-step reliability engineering (retries, caching, validation).
-- **Analytics Engineering:** dbt medallion modeling (bronze/silver/gold), testing, documentation, incremental models, SCD Type 2 on team roster/player-team assignment changes.
+- **Analytics Engineering:** dbt medallion modeling (bronze/silver/gold), testing, documentation, incremental models, SCD Type 2 on team history (relocations, renames, conference realignment), with roster assignments pending (see section 11).
 - **Data Analyst:** Superset dashboards, insight generation from both raw stats and AI-extracted fields (e.g., injury impact analysis).
 
 ---
@@ -154,8 +151,8 @@ Ingestion runs in Airflow's own environment, not as native Databricks notebooks 
 
 **v1 (core build):**
 1. [done] Confirm data source(s) for structured stats + recap text.
-2. [done] Ingestion → bronze in Databricks. Schedules complete for all five sports. Recaps complete for NFL, NCAAF, NHL, NBA; MLB recaps deferred (fix committed, pending retry). Historical backfills: NFL done (1999-2025), NCAAF done (2000-2023), NHL done (2010-2023), NBA done (2010-2023), MLB pending.
-3. [in progress] dbt medallion: silver (cleaned/tested) → gold (star schema, SCD Type 2 on roster). Requires dim_teams design decision first (see section 11).
+2. [mostly done] Ingestion → bronze in Databricks. Schedules and recaps for NFL (1999-2025) and NCAAF (2000-2024). Remaining: rerun NCAAF recap seasons whose writes failed, then add team and player stats ingestion for both sports.
+3. [in progress] dbt medallion: silver staging models built and tested; gold (star schema, SCD Type 2) next.
 4. LLM extraction step: recap text → structured fields into gold.
 5. Airflow DAG tying it together.
 6. Superset dashboards on gold, incorporating AI-extracted fields.
@@ -170,6 +167,10 @@ Ingestion runs in Airflow's own environment, not as native Databricks notebooks 
 ## 11. Open Decisions & Risks
 
 - **Data source confirmation:** resolved, see section 2. Residual risk: ESPN's unofficial endpoint could change or get rate-limited without notice; StoryStats is the documented fallback if it does.
-- **Warehouse:** resolved, see D020. Residual risk: Databricks Free Edition accounts may be deleted after prolonged inactivity (not a fixed window like BigQuery Sandbox's 60 days, but undocumented exactly how long). Revisit if the project goes dormant for an extended stretch.
-- **dim_teams design (pending):** One unified `dim_teams` table with a `sport` column covers cross-sport queries and keeps the star schema simple, but requires sport-specific columns to either be absent or null for other sports. Per-sport dimension tables avoid sparse nulls but fragment the schema and make cross-sport queries harder. Decision required before the dbt scaffold starts.
-- **MLB recap ingestion (deferred):** Individual MLB recap JSON blobs can exceed Databricks's 1MB parameterized query limit. Fix is committed (literal SQL embedding via `_insert_rows_literal`, commit 6c7d58a) but not yet verified in a live run. MLB recaps are absent from the warehouse until a retry confirms the fix.
+- **Warehouse:** resolved, see section 8. Residual risk: Databricks Free Edition accounts may be deleted after prolonged inactivity (not a fixed window like BigQuery Sandbox's 60 days, but undocumented exactly how long). Revisit if the project goes dormant for an extended stretch.
+- **dim_teams design:** resolved. One unified `dim_teams` table with a `sport` column, keyed on sport plus source team id. SCD Type 2 versions are derived from game history (a new version starts when a team's abbreviation, name, or conference changes) rather than a dbt snapshot, so historical relocations already in the backfill appear as separate versions. Conference is populated for NCAAF; null for NFL.
+- **Team and player stats source and grain (pending):** bronze holds schedules and recaps only. Team stats fit `fact_games` at game grain; player stats need their own grain (one row per player per game), which means a second fact table alongside `fact_games`. Decision required before gold `fact_games` and `dim_players`.
+- **SCD Type 2 scope (pending):** team attributes (relocations, renames, conference changes) are covered by `dim_teams`. Whether player-team roster assignments also get SCD Type 2 depends on the stats ingestion decision above.
+- **Current-season ingestion (pending):** the weekly DAGs default to a fixed season. Decide whether they track the in-progress season.
+- **LLM provider (pending):** not chosen. Must fit the no-card, zero-recurring-cost constraint the rest of the stack follows.
+- **CFBD rate limit:** the free tier caps monthly calls. Player stats pulled per week across all NCAAF seasons may approach it; verify the current limit before building that ingestion.
