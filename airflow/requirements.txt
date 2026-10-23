@@ -1,2 +1,1 @@
 databricks-sql-connector>=3.0.0
-nba_api>=1.4.0
