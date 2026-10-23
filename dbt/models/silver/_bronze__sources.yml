@@ -14,15 +14,3 @@ sources:
         description: NCAAF games from the CollegeFootballData API, one row per game.
       - name: ncaaf_recaps_raw
         description: ESPN game summary JSON for NCAAF games.
-      - name: nhl_games_raw
-        description: NHL schedule from api-web.nhle.com, flattened, one row per game.
-      - name: nhl_recaps_raw
-        description: ESPN game summary JSON for NHL games.
-      - name: nba_games_raw
-        description: nba_api LeagueGameLog output. Two rows per game, one per team.
-      - name: nba_recaps_raw
-        description: ESPN game summary JSON for NBA games.
-      - name: mlb_games_raw
-        description: MLB Stats API schedule, one row per game. Does not include scores.
-      - name: mlb_recaps_raw
-        description: ESPN game summary JSON for MLB games. Not yet populated.

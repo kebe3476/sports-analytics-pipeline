@@ -3,7 +3,7 @@ Cleaned, typed games for one sport, conformed to the shared silver game column s
 {% enddocs %}
 
 {% docs col_sport %}
-Lowercase sport code: nfl, ncaaf, nhl, nba, or mlb.
+Lowercase sport code: nfl or ncaaf.
 {% enddocs %}
 
 {% docs col_game_id %}
@@ -15,7 +15,7 @@ Game id exactly as the source API issues it, kept for joining recaps and tracing
 {% enddocs %}
 
 {% docs col_season %}
-Season start year. A 2023-24 NBA or NHL season is 2023.
+Season start year. The 2024 season, including bowls and playoffs played in January 2025, is 2024.
 {% enddocs %}
 
 {% docs col_game_date %}
@@ -43,11 +43,11 @@ Conference at the time of the game. Populated for NCAAF only.
 {% enddocs %}
 
 {% docs col_score %}
-Final score. Null for MLB until the bronze ingest captures scores.
+Final score.
 {% enddocs %}
 
 {% docs col_overtime_flag %}
-True if the game went past regulation (including NHL shootouts). Null where the source cannot tell.
+True if the game went past regulation. Null where the source cannot tell.
 {% enddocs %}
 
 {% docs col_neutral_site %}
